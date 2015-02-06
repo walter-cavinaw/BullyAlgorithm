@@ -1,0 +1,77 @@
+An event can be more than one line but only the line
+before the vector clock is report. As a result you can have extra debug 
+information in your log file, but it is recommended that you have the 
+ability to turn it off. Don't forget to enter the log parsing 
+regular expression.
+
+Starting N1
+N1 {"N1":1}
+Send Election MSG  to N2
+N1 {"N1" : 2}
+Send Election MSG to N3
+N1 {"N1" : 3}
+Receive Answer
+N1 {"N1" :4 , "N2" : 3}
+Receive Answer
+N1 {"N1": 5, "N2" : 3, "N3" : 3}
+Receive COORD 
+N1 {"N1": 6, "N2" : 4, "N3" : 6}
+Received from N234
+N1 {"N1": 7, "N2" : 4, "N3" : 6, "N234" : 2}
+Send to N234
+N1 {"N1": 8, "N2" : 4, "N3" : 6, "N234" : 2}
+
+
+Starting N3
+N3 {"N3" : 1}
+Receive Election MSG
+N3 { "N1" : 3,  "N3" : 2}
+Send Answer 
+N3 {"N1" :3 , "N3" :3}
+Receive Election MSG GG
+N3 {"N1" :3 , "N2" : 4, "N3" :4}
+Send Answer  GG
+N3 {"N1" :3 , "N2" : 4, "N3" :5}
+Send Coord
+N3 {"N1" :3, "N2" : 4, "N3" : 6}
+Starting N2
+N2 {"N2" : 1}
+Receive Election MSG
+N2 { "N1" : 2,  "N2" : 2}
+Send Answer 
+N2 {"N1" :2,  "N2" :3}
+Send Election GG
+N2 {"N1" : 2, "N2" :4}
+Receive Answer GG
+N2 {"N1" : 2, "N2" : 5, "N3" : 5}
+Receive COORD
+N2 {"N1" :3, "N2": 6, "N3" : 6}
+Port number:          234
+Group list file name: GroupFile
+Log file name:        LogFile
+Timeout value:        10
+AYATime:              1
+Starting up Node 234
+N234 {"N234" : 1 }
+Sending to Node 1
+N234 {"N234" : 2 }
+Receive from N1
+N234 {"N1": 8, "N2" : 4, "N3" : 6, "N234" : 3}
+
+
+Starting N4
+N4 {"N4" : 1}
+
+Starting N5
+N5 {"N5" : 1}
+
+
+Starting N6
+N6 {"N6" : 1}
+
+Starting N7
+N7 {"N7" : 1}
+
+Starting N8
+N8 {"N8" : 1}
+
