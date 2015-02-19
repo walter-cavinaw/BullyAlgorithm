@@ -9,10 +9,34 @@
 
 #include "msg.h"
 
+struct clock vector_clock[MAX_NODES];
+struct clock * me;
+
+struct sockaddr_in members[MAX_NODES];
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
 	 cmd);
+}
+
+int init_group(char * groupListFileName){
+	FILE *group_f = fopen( groupListFileName, "r" );
+  	if (group_f == 0 || group_f ==NULL){
+		printf("Error opening group file.\n");
+		return -1;
+  	} 	
+	char line[100];
+	int i = 0;
+	char * pch = line;
+	while(fgets(line, sizeof(line), group_f)){
+		printf("%s", line);
+		//pch = strtok (line," \n");
+		printf("%s\n", pch);
+		pch = strtok(NULL, " \n");
+		printf("%s\n", pch);
+	}
+	fclose(group_f);
+	return 0;
 }
 
 
@@ -81,12 +105,15 @@ int main(int argc, char ** argv) {
 	   err, err>1? "s were ": " was ");
     return -1;
   }
-
+  
+  if(init_group(groupListFileName)==-1){
+	printf("could not initialize group\n");
+	return -1;
+  }
 
   // If you want to produce a repeatable sequence of "random" numbers
   // replace the call time() with an integer.
-  srandom(time());
-  
+  srandom(time(NULL));
   int i;
   for (i = 0; i < 10; i++) {
     int rn;

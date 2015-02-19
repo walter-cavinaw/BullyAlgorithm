@@ -31,10 +31,10 @@ file. If working in pairs both of you must do this.
 
 
 STUDENT  1
-Name :
-St. No:
-Unix Id :
-Email:
+Name : Walter Cavinaw
+St. No: 17440132
+Unix Id : g0e9
+Email: w.cavinaw@gmail.com
 
 
 STUDENT  2
