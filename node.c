@@ -6,38 +6,101 @@
 #include <netinet/udp.h>
 #include <stdio.h>
 #include <errno.h>
+#include <string.h>
+#include <netdb.h>
 
 #include "msg.h"
 
 struct clock vector_clock[MAX_NODES];
-struct clock * me;
-
-struct sockaddr_in members[MAX_NODES];
+struct clock * my_clock = NULL;
+int total_nodes = 0;
+struct addrinfo * nodes[MAX_NODES];
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
 	 cmd);
 }
 
-int init_group(char * groupListFileName){
+int init_addrhint(struct addrinfo * hints){
+	memset(hints,0,sizeof(*hints));
+	hints->ai_family=AF_UNSPEC;
+	hints->ai_socktype=SOCK_DGRAM;
+	hints->ai_protocol=0;
+	hints->ai_flags=AI_ADDRCONFIG;
+
+}
+
+int init_group(char * groupListFileName, unsigned int my_port){
 	FILE *group_f = fopen( groupListFileName, "r" );
   	if (group_f == 0 || group_f ==NULL){
 		printf("Error opening group file.\n");
 		return -1;
   	} 	
 	char line[100];
+	struct addrinfo hints;
+	init_addrhint(&hints);
+	char * portstr, *hostname;
+	unsigned int port;
+	struct addrinfo* res;
 	int i = 0;
-	char * pch = line;
 	while(fgets(line, sizeof(line), group_f)){
-		printf("%s", line);
-		//pch = strtok (line," \n");
-		printf("%s\n", pch);
-		pch = strtok(NULL, " \n");
-		printf("%s\n", pch);
+		// issues with tokenizing here
+		hostname = strtok(line," \n");	
+		printf("%s\n", hostname);
+		portstr = strtok(NULL, " \n");
+		port = strtoul(portstr, NULL, 10);
+		printf("%d\n", port);
+
+		//Set the addrinfo for each member of the group
+		res = nodes[i];
+		int err=getaddrinfo(hostname,portstr,&hints,&res);
+		if(err!=0){
+			printf("did not get the addrinfo for %s\n", hostname);
+		}
+
+		//Here we will initialise the vector clock.
+		//first make sure this nodeId doesnt already exist
+		int j = 0;
+		while (j<i){
+			if (vector_clock[j].nodeId == port){
+				printf("This nodeId already exists\n");
+				return -1;
+			}
+			j++;
+		}
+		vector_clock[i].nodeId = port;
+		vector_clock[i].time = 0;
+		
+		//store a pointer to our own vector clock, fail if our nodeId isn't there
+		if (port == my_port){
+			my_clock = &vector_clock[i];
+		}
+		i++;
+	}
+	//We may not have 9 members total, so here we take care of the remaining
+	//spots in the vecto_clock.
+	total_nodes = i;
+	while (i<MAX_NODES){
+		vector_clock[i].nodeId=0;
+		vector_clock[i].time=0;
+		i++;
 	}
 	fclose(group_f);
 	return 0;
 }
+
+
+void print_vector_clock(){
+	int i = 0;
+	printf("{");
+	while (i<MAX_NODES-1){
+		printf(" N%d:%d,", vector_clock[i].nodeId, vector_clock[i].time);
+		i++;
+	}
+	printf(" N%d:%d }\n", vector_clock[i].nodeId, vector_clock[i].time);
+}
+
+
 
 
 int main(int argc, char ** argv) {
@@ -106,10 +169,15 @@ int main(int argc, char ** argv) {
     return -1;
   }
   
-  if(init_group(groupListFileName)==-1){
+  if(init_group(groupListFileName, port)==-1){
 	printf("could not initialize group\n");
 	return -1;
   }
+  if (my_clock == NULL){
+	printf("My nodeId was not in the list\n");
+	return -1;
+  }
+  print_vector_clock();
 
   // If you want to produce a repeatable sequence of "random" numbers
   // replace the call time() with an integer.
