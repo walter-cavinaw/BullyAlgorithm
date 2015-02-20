@@ -51,3 +51,5 @@ http://www.beej.us/guide/bgnet/output/html/multipage/sendman.html
 http://man7.org/linux/man-pages/man3/getaddrinfo.3.html
 http://stackoverflow.com/questions/2371910/how-to-get-the-ip-address-and-port-number-from-addrinfo-in-unix-c
 https://www.abc.se/~m6695/udp.html
+stackoverflow.com/questions/13547721/udp-socket-set-timeout
+http://stackoverflow.com/questions/2371910/how-to-get-the-ip-address-and-port-number-from-addrinfo-in-unix-c
