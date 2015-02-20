@@ -15,6 +15,7 @@ struct clock vector_clock[MAX_NODES];
 struct clock * my_clock = NULL;
 int total_nodes = 0;
 struct addrinfo * nodes[MAX_NODES];
+struct addrinfo * coordinator;
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
@@ -23,7 +24,7 @@ void usage(char * cmd) {
 
 int init_addrhint(struct addrinfo * hints){
 	memset(hints,0,sizeof(*hints));
-	hints->ai_family=AF_UNSPEC;
+	hints->ai_family=AF_INET;
 	hints->ai_socktype=SOCK_DGRAM;
 	hints->ai_protocol=0;
 	hints->ai_flags=AI_ADDRCONFIG;
@@ -106,7 +107,6 @@ void print_vector_clock(){
 int main(int argc, char ** argv) {
 
   // This is some sample code feel free to delete it
-  
   unsigned long  port;
   char *         groupListFileName;
   char *         logFileName;
@@ -178,6 +178,33 @@ int main(int argc, char ** argv) {
 	return -1;
   }
   print_vector_clock();
+
+  int sockfd;
+  struct sockaddr_in si_me;
+  memset((char *) &si_me, 0, sizeof(si_me));
+  si_me.sin_family = AF_INET;
+  si_me.sin_port = htons(port);
+  si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+  if ((sockfd=socket(AF_INET, SOCK_DGRAM, 0))==-1){
+	printf("failed to create socket\n");
+	return -1;
+  }
+  if (bind(sockfd, (struct sockaddr *)&si_me, sizeof(si_me))==-1) {
+	close(sockfd);
+	perror("failed to bind");
+	return -1;
+  }
+
+  //1. We send AYA to the coordinator on every cycle, getting back IAA messages.
+  // If we don't get an IAA, then we send an elect to everyone above us.
+  //2. If we get an elect we need to send elect messages to the nodes above us.
+  //2a. We set timeouts for each of the nodes
+  //2b. If we get a message back we go back to 1
+  //2c If we don't get any messages back then we send out a coord to everyone below.
+  //3. If the message is a coord we just set the coordinator variable to the new node.
+  //4. If the message is an elect we send an answer.
+
+  close(sockfd);
 
   // If you want to produce a repeatable sequence of "random" numbers
   // replace the call time() with an integer.
