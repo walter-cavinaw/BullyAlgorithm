@@ -277,7 +277,6 @@ int main(int argc, char ** argv) {
   if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, sizeof(sender))<0){
   	printf("timed out on receive\n");
 	//Now we start an election.
-	
   }
   else{
 	//make sure the message is in the correct endianness
