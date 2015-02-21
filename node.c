@@ -16,6 +16,7 @@ struct clock * my_clock = NULL;
 int total_nodes = 0;
 struct addrinfo * nodes[MAX_NODES];
 struct addrinfo * coordinator;
+unsigned int electionID;
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
@@ -49,11 +50,8 @@ int init_group(char * groupListFileName, unsigned int my_port){
 	while(fgets(line, sizeof(line), group_f)){
 		// issues with tokenizing here
 		hostname = strtok(line," \n");	
-		printf("%s\n", hostname);
 		portstr = strtok(NULL, " \n");
 		port = strtoul(portstr, NULL, 10);
-		printf("%d\n", port);
-
 		//Set the addrinfo for each member of the group
 		//res = nodes[i];
 		int err=getaddrinfo(hostname,portstr,&hints,&nodes[i]);
@@ -105,6 +103,17 @@ void net_to_host_msg(struct msg * last_msg){
 	}
 }
 
+void host_to_net_msg(struct msg * new_msg){
+	new_msg->msgID = htonl(new_msg->msgID);
+	new_msg->electionID = htonl(new_msg->electionID);
+	int i = 0;
+	while(i<MAX_NODES){
+		new_msg->vectorClock[i].nodeId = htonl(new_msg->vectorClock[i].nodeId);
+		new_msg->vectorClock[i].time = htonl(new_msg->vectorClock[i].time);
+		i++;
+	}
+}
+
 //This is for debugging purposes; I wanted to make sure the clocks were right
 void print_vector_clock(){
 	int i = 0;
@@ -122,6 +131,7 @@ void test_net_to_host_msg(){
   tester.electionID = htonl(5);
   memcpy(&tester, &vector_clock, sizeof(vector_clock));
   net_to_host_msg(&tester);
+  host_to_net_msg(&tester);
 }
 
 unsigned short get_in_port(struct sockaddr *sa){
@@ -163,6 +173,27 @@ void test_set_coordinator(){
 	sender.sin_family = AF_INET;
 	sender.sin_port = htons(9000);
 	set_coordinator(&sender);
+}
+
+int start_election(int sockfd){
+	struct msg new_msg;
+	new_msg.msgID = ELECT;
+	new_msg.electionID = electionID++;
+	memcpy(&new_msg, &vector_clock, sizeof(vector_clock));
+	int i = 0;
+	while (i<total_nodes){
+		//send to all nodes above you.
+		if (get_in_port(nodes[i]->ai_addr) > my_clock->nodeId){
+			//send it to this person
+			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
+				printf("could not send\n");
+				return -1;
+			} else{
+				printf("sent!\n");
+			}
+		}
+		i++;
+	}
 }
 
 
@@ -215,11 +246,11 @@ int main(int argc, char ** argv) {
   printf("Timeout value:            %d\n", timeoutValue);  
   printf("AYATime:                  %d\n", AYATime);
   printf("Send failure probability: %d\n", sendFailureProbability);
+  printf("First electionID:	    %d\n", electionID);
   printf("Starting up Node %d\n", port);
   
-  printf("N%d {\"N%d\" : %d }\n", port, port, myClock++);
-  printf("Sending to Node 1\n");
-  printf("N%d {\"N%d\" : %d }\n", port, port, myClock++);
+  srandom(time(NULL));
+  electionID = random() %100; 
   
   if (err) {
     printf("%d conversion error%sencountered, program exiting.\n",
@@ -235,7 +266,10 @@ int main(int argc, char ** argv) {
 	printf("My nodeId was not in the list\n");
 	return -1;
   }
+  printf("N%d {\"N%d\" : %d }\n", port, port, my_clock->time++);
+  
   print_vector_clock();
+
 
   int sockfd;
   struct sockaddr_in si_me;
@@ -273,10 +307,12 @@ int main(int argc, char ** argv) {
   memset(&last_msg, 0, sizeof(last_msg)); //make sure it doesn't contain any funky values to start
   struct sockaddr_in sender;  //this is to store who sent the most recent message.
   memset(&sender, 0, sizeof(sender));
+  socklen_t sender_len = sizeof(sender);
   //wait to receive a message and timeout if we don't.
-  if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, sizeof(sender))<0){
+  if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
   	printf("timed out on receive\n");
 	//Now we start an election.
+	start_election(sockfd);
   }
   else{
 	//make sure the message is in the correct endianness
@@ -290,7 +326,6 @@ int main(int argc, char ** argv) {
 
   // If you want to produce a repeatable sequence of "random" numbers
   // replace the call time() with an integer.
-  srandom(time(NULL));
   int i;
   for (i = 0; i < 10; i++) {
     int rn;
