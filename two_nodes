@@ -1,0 +1,3 @@
+make
+./node 8000 group vizlog 3 1 0 &
+./node 8888 group vizlog 2 1 0 &

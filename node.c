@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <string.h>
 #include <netdb.h>
+#include <stdlib.h>
+#include <fcntl.h>
 
 #include "msg.h"
 
@@ -33,6 +35,43 @@ int init_addrhint(struct addrinfo * hints){
 	hints->ai_flags=AI_ADDRCONFIG;
 
 }
+
+int init_logging(char * logFileName){
+	if (strcmp(logFileName, "none")==0){
+		printf("use stdout\n");
+	} else{
+		int logf = open(logFileName, O_WRONLY | O_TRUNC | O_CREAT,S_IRUSR | S_IRGRP | S_IROTH );
+		close(logf);	
+	}
+}
+
+int log_msg(char * logFileName, char * message){
+	struct flock fl;
+	int fd = 1;
+	fl.l_type   = F_WRLCK;  /* F_RDLCK, F_WRLCK, F_UNLCK    */
+	fl.l_whence = SEEK_SET; /* SEEK_SET, SEEK_CUR, SEEK_END */
+	fl.l_start  = 0;        /* Offset from l_whence         */
+	fl.l_len    = 0;        /* length, 0 = to EOF           */
+	fl.l_pid    = getpid(); /* our PID                      */
+	
+	if (strcmp(logFileName, "none") != 0){
+		fd = open(logFileName, O_APPEND, S_IRUSR | S_IRGRP | S_IROTH );
+	}
+	if (fcntl(fd, F_SETLKW, &fl) == -1){
+		perror("fcntl");
+	}
+	char * buf = "hello\n";
+	printf("what is the fd here: %d\n", fd);
+	if(write(fd, buf, strlen(buf)) < 0 ){
+		perror("write failed");
+	}
+	if (fd!= 1){
+		close(fd);
+	}
+	fl.l_type   = F_UNLCK;  /* tell it to unlock the region */
+	fcntl(fd, F_SETLK, &fl); /* set the region to unlocked */	
+}
+	
 
 int init_group(char * groupListFileName, unsigned int my_port){
 	FILE *group_f = fopen( groupListFileName, "r" );
@@ -175,24 +214,50 @@ void test_set_coordinator(){
 	set_coordinator(&sender);
 }
 
-int start_election(int sockfd){
+//Send an elect msg to all nodes that have a greater Id than me
+int start_election(int sockfd, unsigned int prev_electID){
 	struct msg new_msg;
 	new_msg.msgID = ELECT;
-	new_msg.electionID = electionID++;
-	memcpy(&new_msg, &vector_clock, sizeof(vector_clock));
+	if (prev_electID == -1){	//If it is negative 1 then it is starting a new election
+		new_msg.electionID = electionID++;
+	} else {
+		new_msg.electionID = prev_electID;	//Here it is continuing a prev election
+	}
+	memcpy(&new_msg.vectorClock, &vector_clock, sizeof(vector_clock));
+	host_to_net_msg(&new_msg);
 	int i = 0;
 	while (i<total_nodes){
 		//send to all nodes above you.
 		if (get_in_port(nodes[i]->ai_addr) > my_clock->nodeId){
 			//send it to this person
 			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
-				printf("could not send\n");
+				printf("could not send ELECT to %d\n", get_in_port(nodes[i]->ai_addr));
 				return -1;
 			} else{
 				printf("sent!\n");
 			}
 		}
 		i++;
+	}
+	return 0;
+}
+
+int wait_for_message(int sockfd){
+	return 0;
+}
+
+int declare_coordinator(int sockfd, unsigned int elect_ID){
+	struct msg new_msg;
+	new_msg.msgID = COORD;
+	new_msg.electionID = elect_ID;
+	memcpy(&new_msg.vectorClock, &vector_clock, sizeof(vector_clock));
+	host_to_net_msg(&new_msg);
+	int i = 0;
+	while (i<total_nodes){
+		if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
+			printf("could not send COORD to %d\n", get_in_port(nodes[i]->ai_addr));
+		}
+	i++;
 	}
 }
 
@@ -239,6 +304,9 @@ int main(int argc, char ** argv) {
     printf("sendFailureProbability conversion error\n");
     err++;
   }
+
+  init_logging(logFileName);
+  log_msg(logFileName, "hey");
 
   printf("Port number:              %d\n", port);
   printf("Group list file name:     %s\n", groupListFileName);
@@ -312,13 +380,22 @@ int main(int argc, char ** argv) {
   if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
   	printf("timed out on receive\n");
 	//Now we start an election.
-	start_election(sockfd);
+	if(start_election(sockfd, -1)==-1){
+		printf("there was an error starting the election\n");
+	}
+	wait_for_message(sockfd);
+	declare_coordinator(sockfd, electionID);
   }
   else{
 	//make sure the message is in the correct endianness
 	net_to_host_msg(&last_msg);
 	if (last_msg.msgID == COORD){
+		printf("got coord message\n");
 		set_coordinator(&sender);
+	}
+	if (last_msg.msgID == ELECT){
+		printf("got elect msg\n");
+		start_election(sockfd, last_msg.electionID);
 	}
   }
 
@@ -335,7 +412,7 @@ int main(int argc, char ** argv) {
     // the average value for the timeout is AYA time.
 
     int sc = rn % (2*AYATime);
-    printf("Random number %d is: %d\n", i, sc);
+    //printf("Random number %d is: %d\n", i, sc);
   }
 
   return 0;
