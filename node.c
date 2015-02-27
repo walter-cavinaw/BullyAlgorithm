@@ -25,6 +25,16 @@ void usage(char * cmd) {
 	 cmd);
 }
 
+void print_vector_clock(int fd){
+	int i = 0;
+	dprintf(fd,"N%d {", my_clock->nodeId);
+	while (i<MAX_NODES-1){
+		dprintf(fd, " N%d:%d,", vector_clock[i].nodeId, vector_clock[i].time);
+		i++;
+	}
+	dprintf(fd, " N%d:%d }\n", vector_clock[i].nodeId, vector_clock[i].time);
+}
+
 //I put all of this in another method so that it would clean up the main function
 //and so that I could reuse it if need be. But mostly because there is a lot in main.
 int init_addrhint(struct addrinfo * hints){
@@ -40,7 +50,9 @@ int init_logging(char * logFileName){
 	if (strcmp(logFileName, "none")==0){
 		printf("use stdout\n");
 	} else{
-		int logf = open(logFileName, O_WRONLY | O_TRUNC | O_CREAT,S_IRUSR | S_IRGRP | S_IROTH );
+		int logf = open(logFileName, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+		printf("init log fd: %d\n", logf);
+		perror("init");
 		close(logf);	
 	}
 }
@@ -55,16 +67,18 @@ int log_msg(char * logFileName, char * message){
 	fl.l_pid    = getpid(); /* our PID                      */
 	
 	if (strcmp(logFileName, "none") != 0){
-		fd = open(logFileName, O_APPEND, S_IRUSR | S_IRGRP | S_IROTH );
+		fd = open(logFileName, O_WRONLY |O_APPEND);
+		printf("fd after opening: %d\n", fd);
 	}
 	if (fcntl(fd, F_SETLKW, &fl) == -1){
 		perror("fcntl");
 	}
 	char * buf = "hello\n";
 	printf("what is the fd here: %d\n", fd);
-	if(write(fd, buf, strlen(buf)) < 0 ){
+	if(dprintf(fd, "%s\n", message) < 0 ){
 		perror("write failed");
 	}
+	print_vector_clock(fd);
 	if (fd!= 1){
 		close(fd);
 	}
@@ -151,17 +165,6 @@ void host_to_net_msg(struct msg * new_msg){
 		new_msg->vectorClock[i].time = htonl(new_msg->vectorClock[i].time);
 		i++;
 	}
-}
-
-//This is for debugging purposes; I wanted to make sure the clocks were right
-void print_vector_clock(){
-	int i = 0;
-	printf("{");
-	while (i<MAX_NODES-1){
-		printf(" N%d:%d,", vector_clock[i].nodeId, vector_clock[i].time);
-		i++;
-	}
-	printf(" N%d:%d }\n", vector_clock[i].nodeId, vector_clock[i].time);
 }
 
 void test_net_to_host_msg(){
@@ -306,7 +309,6 @@ int main(int argc, char ** argv) {
   }
 
   init_logging(logFileName);
-  log_msg(logFileName, "hey");
 
   printf("Port number:              %d\n", port);
   printf("Group list file name:     %s\n", groupListFileName);
@@ -334,10 +336,8 @@ int main(int argc, char ** argv) {
 	printf("My nodeId was not in the list\n");
 	return -1;
   }
+  log_msg(logFileName, "started");
   printf("N%d {\"N%d\" : %d }\n", port, port, my_clock->time++);
-  
-  print_vector_clock();
-
 
   int sockfd;
   struct sockaddr_in si_me;
