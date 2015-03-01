@@ -89,10 +89,14 @@ int init_logging(char * logFileName){
 		printf("use stdout\n");
 	} else{
 		if( access( logFileName, F_OK ) != -1 ) {
-	    		int logf = open(logFile, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+	    		int logf = open(logFile, O_WRONLY);
 			dprintf(logf,"\n\n");
 			printf("init log fd: %d\n", logf);
 			perror("init");
+			close(logf);
+		} else{
+			int logf = open(logFile, O_WRONLY|O_TRUNC|O_CREAT, 0666);
+			dprintf(logf, "\n\n");
 			close(logf);
 		}
 	}
@@ -597,7 +601,7 @@ int main(int argc, char ** argv) {
   socklen_t sender_len = sizeof(sender);
   //wait to receive a message and timeout if we don't.
   int num_loops;
-  while (num_loops < 6){
+  while (1){
 	if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
 		if (!i_am_coordinator()){
 			elect_coordinator(sockfd, timeoutValue, 0);
