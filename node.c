@@ -23,10 +23,19 @@ struct addrinfo * nodes[MAX_NODES];
 struct addrinfo * coordinator;
 unsigned int electionID;
 char * logFile;
+int failure_rate;
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
 	 cmd);
+}
+
+int should_send(){
+	int rand_int = random();
+	if ((rand_int % 100) < failure_rate){
+		return 0;
+	}
+	return 1;
 }
 
 unsigned short get_in_port(struct sockaddr *sa){
@@ -231,21 +240,25 @@ void send_iaa(int sockfd, struct sockaddr_in * sender){
 	//we are given the sender and must respond with IAA
 	struct msg new_msg;
 	create_msg(&new_msg, IAA, get_in_port((struct sockaddr *)sender));
-	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) sender, sizeof(struct sockaddr))==-1){
-		log_msg("could not send answer");
-	}
-	log_msg("IAA has been sent");	
+	if (should_send()){
+		if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) sender, sizeof(struct sockaddr))==-1){
+			log_msg("could not send answer");
+		}
+		}
+		log_msg("IAA has been sent");
 }
 
 void send_aya(int sockfd){
 	//we know the coordinator so we send aya to him
 	struct msg new_msg;
 	create_msg(&new_msg, AYA, my_clock->nodeId);
+	if (should_send()){
 	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) coordinator->ai_addr, coordinator->ai_addrlen)==-1){
 		log_msg("could not send AYA");
+		return;
+	}
 	}
 	log_msg("AYA has been sent");
-
 }
 
 void send_answer(int sockfd, unsigned int prev_electID, struct sockaddr_in * sender){
@@ -254,10 +267,14 @@ void send_answer(int sockfd, unsigned int prev_electID, struct sockaddr_in * sen
 	//are referring to
 	struct msg new_msg;
 	create_msg(&new_msg, ANSWER, prev_electID);
+	if (should_send()){
 	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) sender, sizeof(struct sockaddr))==-1){
 		log_msg("could not send answer");
+		return;
+	}
 	}
 	log_msg("ANSWER has been sent");
+
 }
 
 void test_net_to_host_msg(){
@@ -311,13 +328,13 @@ int start_election(int sockfd, unsigned int prev_electID){
 		//send to all nodes above you.
 		if (get_in_port(nodes[i]->ai_addr) > my_clock->nodeId){
 			//send it to this person
+			if (should_send()){
 			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
 				log_msg("The elect could not be sent");
 				return -1;
-			} else{
-				log_msg("sent elect");
-				printf("%d : sent message to %d\n", my_clock->nodeId, get_in_port(nodes[i]->ai_addr));
 			}
+			}
+			log_msg("sent ELECT");
 		}
 		i++;
 	}
@@ -382,9 +399,12 @@ int declare_coordinator(int sockfd, unsigned int prev_electID){
 	int i = 0;
 	while (i<total_nodes){
 		if (my_clock->nodeId != get_in_port(nodes[i]->ai_addr)){
+			if (should_send()){
 			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
 				log_msg("could not send COORD");
 			}
+			}
+			log_msg("sent a COORD message"); 
 		}
 	i++;
 	}
@@ -525,6 +545,7 @@ int main(int argc, char ** argv) {
   printf("Send failure probability: %d\n", sendFailureProbability);
   printf("First electionID:	    %d\n", electionID);
   printf("Starting up Node %d\n", port);
+  failure_rate = sendFailureProbability;
   
   srandom(port);
   electionID = (unsigned int)((random() % 99)+ 1); 
