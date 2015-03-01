@@ -1,0 +1,6 @@
+make
+./node 8800 localgroup 8800.dat 3 3 0 &
+./node 9900 localgroup 9900.dat 3 3 0 &
+./node 10100 localgroup 10100.dat 3 3 0 &
+./node 10200 localgroup 10200.dat 3 3 0 &
+./node 10300 localgroup 10300.dat 3 3 0
