@@ -87,18 +87,9 @@ int init_logging(char * logFileName){
 	logFile = logFileName;
 	if (strcmp(logFile, "none")==0){
 		printf("use stdout\n");
-	} else{
-		if( access( logFileName, F_OK ) != -1 ) {
-	    		int logf = open(logFile, O_WRONLY);
-			dprintf(logf,"\n\n");
-			printf("init log fd: %d\n", logf);
-			perror("init");
-			close(logf);
-		} else{
-			int logf = open(logFile, O_WRONLY|O_TRUNC|O_CREAT, 0666);
-			dprintf(logf, "\n\n");
-			close(logf);
-		}
+	} else {
+		int logf = open(logFile, O_WRONLY|O_TRUNC|O_CREAT, 0666);
+		close(logf);
 	}
 }
 
@@ -642,6 +633,7 @@ int main(int argc, char ** argv) {
 		int rn;
 		rn = random();
 		int sc = rn % (2*AYATime);
+		printf(" wait for %d seconds\n", sc);
 		sleep(sc);
 		send_aya(sockfd);
 	  }
