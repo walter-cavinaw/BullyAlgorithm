@@ -13,26 +13,54 @@
 
 #include "msg.h"
 
+#define stdName "none"
+
 struct clock vector_clock[MAX_NODES];
 struct clock * my_clock = NULL;
+struct addrinfo *my_addrinfo;
 int total_nodes = 0;
 struct addrinfo * nodes[MAX_NODES];
 struct addrinfo * coordinator;
 unsigned int electionID;
+char * logFile;
 
 void usage(char * cmd) {
   printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
 	 cmd);
 }
 
+unsigned short get_in_port(struct sockaddr *sa){
+    if (sa->sa_family == AF_INET) {
+        return ntohs(((struct sockaddr_in*)sa)->sin_port);
+    }
+
+    return ntohs(((struct sockaddr_in6*)sa)->sin6_port);
+}
+
 void print_vector_clock(int fd){
 	int i = 0;
 	dprintf(fd,"N%d {", my_clock->nodeId);
 	while (i<MAX_NODES-1){
-		dprintf(fd, " N%d:%d,", vector_clock[i].nodeId, vector_clock[i].time);
+		dprintf(fd, "\"N%d\": %d, ", vector_clock[i].nodeId, vector_clock[i].time);
 		i++;
 	}
-	dprintf(fd, " N%d:%d }\n", vector_clock[i].nodeId, vector_clock[i].time);
+	dprintf(fd, "\"N%d\":%d}\n", vector_clock[i].nodeId, vector_clock[i].time);
+}
+
+void set_vector_clock(struct msg * last_msg){
+	int local_iter = MAX_NODES - 1;
+	while (local_iter > -1){
+		int remote_iter = 0;
+		while (remote_iter < MAX_NODES){
+			if(vector_clock[local_iter].nodeId == last_msg->vectorClock[remote_iter].nodeId){
+				if(vector_clock[local_iter].time < last_msg->vectorClock[remote_iter].time){
+					vector_clock[local_iter].time = last_msg->vectorClock[remote_iter].time;
+				}
+			}
+			remote_iter++;
+		}
+		local_iter--;
+	}
 }
 
 //I put all of this in another method so that it would clean up the main function
@@ -47,17 +75,21 @@ int init_addrhint(struct addrinfo * hints){
 }
 
 int init_logging(char * logFileName){
-	if (strcmp(logFileName, "none")==0){
+	logFile = logFileName;
+	if (strcmp(logFile, "none")==0){
 		printf("use stdout\n");
 	} else{
-		int logf = open(logFileName, O_WRONLY | O_TRUNC | O_CREAT, 0666);
-		printf("init log fd: %d\n", logf);
-		perror("init");
-		close(logf);	
+		if( access( logFileName, F_OK ) != -1 ) {
+	    		int logf = open(logFile, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+			dprintf(logf,"\n\n");
+			printf("init log fd: %d\n", logf);
+			perror("init");
+			close(logf);
+		}
 	}
 }
 
-int log_msg(char * logFileName, char * message){
+int log_msg(char * message){
 	struct flock fl;
 	int fd = 1;
 	fl.l_type   = F_WRLCK;  /* F_RDLCK, F_WRLCK, F_UNLCK    */
@@ -65,16 +97,13 @@ int log_msg(char * logFileName, char * message){
 	fl.l_start  = 0;        /* Offset from l_whence         */
 	fl.l_len    = 0;        /* length, 0 = to EOF           */
 	fl.l_pid    = getpid(); /* our PID                      */
-	
-	if (strcmp(logFileName, "none") != 0){
-		fd = open(logFileName, O_WRONLY |O_APPEND);
-		printf("fd after opening: %d\n", fd);
+
+	if (strcmp(logFile, stdName) != 0){
+		fd = open(logFile, O_WRONLY |O_APPEND);
 	}
 	if (fcntl(fd, F_SETLKW, &fl) == -1){
 		perror("fcntl");
 	}
-	char * buf = "hello\n";
-	printf("what is the fd here: %d\n", fd);
 	if(dprintf(fd, "%s\n", message) < 0 ){
 		perror("write failed");
 	}
@@ -83,7 +112,9 @@ int log_msg(char * logFileName, char * message){
 		close(fd);
 	}
 	fl.l_type   = F_UNLCK;  /* tell it to unlock the region */
-	fcntl(fd, F_SETLK, &fl); /* set the region to unlocked */	
+	fcntl(fd, F_SETLK, &fl); /* set the region to unlocked */
+	
+	my_clock->time++;
 }
 	
 
@@ -114,6 +145,9 @@ int init_group(char * groupListFileName, unsigned int my_port){
 
 		//Here we will initialise the vector clock.
 		//first make sure this nodeId doesnt already exist
+		if (port == my_port){
+			my_addrinfo = nodes[i];
+		}
 		int j = 0;
 		while (j<i){
 			if (vector_clock[j].nodeId == port){
@@ -140,6 +174,16 @@ int init_group(char * groupListFileName, unsigned int my_port){
 		i++;
 	}
 	fclose(group_f);
+	my_clock->time++;
+	return 0;
+}
+
+int i_am_coordinator(){
+	if (coordinator != NULL){
+		if (get_in_port(coordinator->ai_addr) == my_clock->nodeId){
+			return 1;
+		}
+	}
 	return 0;
 }
 
@@ -167,6 +211,55 @@ void host_to_net_msg(struct msg * new_msg){
 	}
 }
 
+void create_msg(struct msg * new_msg, msgType type,unsigned int prev_electID){
+	new_msg->msgID = type;
+	if (prev_electID == 0){
+		new_msg->electionID = ++electionID;
+	} else{
+		new_msg->electionID = prev_electID;
+	}
+	if(type==ANSWER){
+		printf("%d : about to send answer for %u\n", my_clock->nodeId, new_msg->electionID);
+	} else if (type==ELECT){
+		printf("%d : about to send elect for %u\n", my_clock->nodeId, new_msg->electionID);
+	}
+	memcpy(&(new_msg->vectorClock), &vector_clock, sizeof(vector_clock));
+	host_to_net_msg(new_msg);
+}
+
+void send_iaa(int sockfd, struct sockaddr_in * sender){
+	//we are given the sender and must respond with IAA
+	struct msg new_msg;
+	create_msg(&new_msg, IAA, get_in_port((struct sockaddr *)sender));
+	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) sender, sizeof(struct sockaddr))==-1){
+		log_msg("could not send answer");
+	}
+	log_msg("IAA has been sent");	
+}
+
+void send_aya(int sockfd){
+	//we know the coordinator so we send aya to him
+	struct msg new_msg;
+	create_msg(&new_msg, AYA, my_clock->nodeId);
+	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) coordinator->ai_addr, coordinator->ai_addrlen)==-1){
+		log_msg("could not send AYA");
+	}
+	log_msg("AYA has been sent");
+
+}
+
+void send_answer(int sockfd, unsigned int prev_electID, struct sockaddr_in * sender){
+	//we know the sender and must give an answer
+	//we need to respond with the correct electionId so he knows what election we
+	//are referring to
+	struct msg new_msg;
+	create_msg(&new_msg, ANSWER, prev_electID);
+	if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, (struct sockaddr *) sender, sizeof(struct sockaddr))==-1){
+		log_msg("could not send answer");
+	}
+	log_msg("ANSWER has been sent");
+}
+
 void test_net_to_host_msg(){
   struct msg tester;
   tester.msgID = htonl(ELECT);
@@ -176,13 +269,6 @@ void test_net_to_host_msg(){
   host_to_net_msg(&tester);
 }
 
-unsigned short get_in_port(struct sockaddr *sa){
-    if (sa->sa_family == AF_INET) {
-        return ntohs(((struct sockaddr_in*)sa)->sin_port);
-    }
-
-    return ntohs(((struct sockaddr_in6*)sa)->sin6_port);
-}
 
 //This function takes the sender and finds that sender in our group.
 //Then we assign the coordinator pointer to that node. Important to remember that our
@@ -192,12 +278,11 @@ void set_coordinator(struct sockaddr_in * sender){
 	unsigned int node_port= 0;
 	unsigned int sender_port = get_in_port((struct sockaddr *) sender);
 	int done = 0;
-	printf("sender port : %u\n", sender_port);
 	while (i<total_nodes){
 		node_port = get_in_port(nodes[i]->ai_addr);
 		if (node_port == sender_port){
 			//make this guy the coord
-			printf("The coordinator has Id: %d\n", sender_port);
+			log_msg("The coordinator has been set");
 			coordinator = nodes[i];
 			done = 1;
 		}
@@ -220,50 +305,172 @@ void test_set_coordinator(){
 //Send an elect msg to all nodes that have a greater Id than me
 int start_election(int sockfd, unsigned int prev_electID){
 	struct msg new_msg;
-	new_msg.msgID = ELECT;
-	if (prev_electID == -1){	//If it is negative 1 then it is starting a new election
-		new_msg.electionID = electionID++;
-	} else {
-		new_msg.electionID = prev_electID;	//Here it is continuing a prev election
-	}
-	memcpy(&new_msg.vectorClock, &vector_clock, sizeof(vector_clock));
-	host_to_net_msg(&new_msg);
+	create_msg(&new_msg, ELECT, prev_electID);
 	int i = 0;
 	while (i<total_nodes){
 		//send to all nodes above you.
 		if (get_in_port(nodes[i]->ai_addr) > my_clock->nodeId){
 			//send it to this person
 			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
-				printf("could not send ELECT to %d\n", get_in_port(nodes[i]->ai_addr));
+				log_msg("The elect could not be sent");
 				return -1;
 			} else{
-				printf("sent!\n");
+				log_msg("sent elect");
+				printf("%d : sent message to %d\n", my_clock->nodeId, get_in_port(nodes[i]->ai_addr));
 			}
 		}
 		i++;
 	}
+	log_msg("done sending elects");
 	return 0;
 }
 
-int wait_for_message(int sockfd){
-	return 0;
+int wait_for_answer(int sockfd, unsigned int prev_electID){
+	int elect_over = 0;
+	struct msg last_msg;  //this will always store the last message we receive
+	memset(&last_msg, 0, sizeof(last_msg)); //make sure it doesn't contain any funky values to start
+	struct sockaddr_in sender;  //this is to store who sent the most recent message.
+	memset(&sender, 0, sizeof(sender));
+	socklen_t sender_len = sizeof(sender);
+	while (!elect_over){
+		if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
+			log_msg("timed out waiting for return messages");
+			return 0;
+		} else{
+			//Check which message I got and act accordingly.
+			net_to_host_msg(&last_msg);
+			set_vector_clock(&last_msg);
+			if (last_msg.msgID == ELECT){
+				log_msg("received ELECT while waiting for answer");
+				//we got an elect from someone so send back a msg
+				send_answer(sockfd, last_msg.electionID, &sender);
+			}
+			else if (last_msg.msgID == AYA){
+				log_msg("received AYA while waiting for answer");
+				//someone wants to know if we are alive
+				send_iaa(sockfd, &sender);
+			}
+			else if (last_msg.msgID == ANSWER){
+				log_msg("received ANSWER while waiting for answer");
+				//we got an answer so we can just call off the election.
+				//make sure we check that the answer has the same election Id we sent
+				printf("waiting on %u, but got %u\n", prev_electID, last_msg.electionID);
+				if(prev_electID == last_msg.electionID){
+					log_msg("the electionID's matched");
+					elect_over = 1;
+				}
+			} else if(last_msg.msgID == IAA){
+				log_msg("received IAA while waiting for answer");
+				//we can ignore this
+			} else if(last_msg.msgID == COORD){
+				log_msg("received COORD while waiting for answer");
+				//we can ignore this
+			}
+			else {
+				log_msg("received NONSENSE while waiting for answer");
+			}
+		}
+	}
+	return 1;
 }
 
-int declare_coordinator(int sockfd, unsigned int elect_ID){
+int declare_coordinator(int sockfd, unsigned int prev_electID){
+	log_msg("I am the coordinator");
+	coordinator = my_addrinfo;
 	struct msg new_msg;
-	new_msg.msgID = COORD;
-	new_msg.electionID = elect_ID;
-	memcpy(&new_msg.vectorClock, &vector_clock, sizeof(vector_clock));
-	host_to_net_msg(&new_msg);
+	create_msg(&new_msg, COORD, prev_electID);	
 	int i = 0;
 	while (i<total_nodes){
-		if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
-			printf("could not send COORD to %d\n", get_in_port(nodes[i]->ai_addr));
+		if (my_clock->nodeId != get_in_port(nodes[i]->ai_addr)){
+			if (sendto(sockfd, &new_msg, sizeof(new_msg), 0, nodes[i]->ai_addr, nodes[i]->ai_addrlen) == -1){
+				log_msg("could not send COORD");
+			}
 		}
 	i++;
 	}
+	log_msg("sent all the coord messages");
 }
 
+int wait_for_coord(int sockfd, int timeoutValue){
+	//we must set the timer to a different value on the socket at the beginning
+	struct timeval tv;
+	tv.tv_sec = timeoutValue*(total_nodes+1);
+	tv.tv_usec = 0;	
+	if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+		printf("Could not set timeout on socket\n");
+	}
+	struct msg last_msg;  //this will always store the last message we receive
+	memset(&last_msg, 0, sizeof(last_msg)); //make sure it doesn't contain any funky values to start
+	struct sockaddr_in sender;  //this is to store who sent the most recent message.
+	memset(&sender, 0, sizeof(sender));
+	socklen_t sender_len = sizeof(sender);
+	int found_coord = 0;
+	while(!found_coord){
+		if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
+			//we timed out so there is no coordinator. IS elect over? No
+			return 0;
+		} else{
+			net_to_host_msg(&last_msg);
+			set_vector_clock(&last_msg);
+			if (last_msg.msgID == ELECT){
+				log_msg("received ELECT while waiting for COORD");
+				//we got an elect from someone so send back a msg
+				send_answer(sockfd, last_msg.electionID, &sender);
+			}
+			else if (last_msg.msgID == AYA){
+				log_msg("received AYA while waiting for COORD");
+				//someone wants to know if we are alive
+				send_iaa(sockfd, &sender);
+			}
+			else if (last_msg.msgID == ANSWER){
+				log_msg("received ANSWER while waiting for COORD");
+			}
+			else if(last_msg.msgID == IAA){
+				log_msg("received IAA while waiting for COORD");
+			}
+			else if(last_msg.msgID == COORD){
+				log_msg("received COORD while waiting for COORD");
+				set_coordinator(&sender);
+				found_coord = 1;
+			}
+			else {
+				log_msg("received NONSENSE while waiting for COORD");
+			}
+		}
+	}
+	//change the timeout on the socket back to its original
+	tv.tv_sec = timeoutValue;
+	tv.tv_usec = 0;	
+	if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+		printf("Could not set timeout on socket\n");
+	}
+	return 1;
+}
+
+void elect_coordinator(int sockfd, int timeoutValue, unsigned int prev_electID){
+	//here we refactor the loop that doesnt finish until we have a coordinator
+	//This is important to maintain our loop invariant below: we must always know the coordinator.
+	log_msg("start election process");
+	int coord_found = 0;
+	if (prev_electID == 0){
+		prev_electID = ++electionID;
+	}
+	while(!coord_found){
+		//Now we start an election.
+		if(start_election(sockfd, prev_electID)==-1){
+		printf("there was an error starting the election\n");
+		}
+		if(wait_for_answer(sockfd, prev_electID) == 0){
+			//since 0 was returned I must have timed out waiting for a return msg.
+			//So I am the coordinator now. Let everybody know.
+			declare_coordinator(sockfd, electionID);
+			coord_found = 1;
+		} else {
+			coord_found = wait_for_coord(sockfd, timeoutValue);
+		}
+	log_msg("finished election");
+	}
+}
 
 int main(int argc, char ** argv) {
 
@@ -319,8 +526,8 @@ int main(int argc, char ** argv) {
   printf("First electionID:	    %d\n", electionID);
   printf("Starting up Node %d\n", port);
   
-  srandom(time(NULL));
-  electionID = random() %100; 
+  srandom(port);
+  electionID = (unsigned int)((random() % 99)+ 1); 
   
   if (err) {
     printf("%d conversion error%sencountered, program exiting.\n",
@@ -336,8 +543,7 @@ int main(int argc, char ** argv) {
 	printf("My nodeId was not in the list\n");
 	return -1;
   }
-  log_msg(logFileName, "started");
-  printf("N%d {\"N%d\" : %d }\n", port, port, my_clock->time++);
+  log_msg("started");
 
   int sockfd;
   struct sockaddr_in si_me;
@@ -363,58 +569,62 @@ int main(int argc, char ** argv) {
   //testing
   //test_set_coordinator();
 
-  //1. We send AYA to the coordinator on every cycle, getting back IAA messages.
-  // If we don't get an IAA, then we send an elect to everyone above us.
-  //2. If we get an elect we need to send elect messages to the nodes above us.
-  //2a. We set timeouts for each of the nodes
-  //2b. If we get a message back we go back to 1
-  //2c If we don't get any messages back then we send out a coord to everyone below.
-  //3. If the message is a coord we just set the coordinator variable to the new node.
-  //4. If the message is an elect we send an answer.
   struct msg last_msg;  //this will always store the last message we receive
   memset(&last_msg, 0, sizeof(last_msg)); //make sure it doesn't contain any funky values to start
   struct sockaddr_in sender;  //this is to store who sent the most recent message.
   memset(&sender, 0, sizeof(sender));
   socklen_t sender_len = sizeof(sender);
   //wait to receive a message and timeout if we don't.
-  if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
-  	printf("timed out on receive\n");
-	//Now we start an election.
-	if(start_election(sockfd, -1)==-1){
-		printf("there was an error starting the election\n");
-	}
-	wait_for_message(sockfd);
-	declare_coordinator(sockfd, electionID);
+  int num_loops;
+  while (num_loops < 6){
+	if(recvfrom(sockfd, &last_msg, sizeof(last_msg), 0,(struct sockaddr *) &sender, &sender_len)<0){
+		if (!i_am_coordinator()){
+			elect_coordinator(sockfd, timeoutValue, 0);
+		}
+	  }
+	  else{
+		//make sure the message is in the correct endianness
+		net_to_host_msg(&last_msg);
+		set_vector_clock(&last_msg);
+		if (last_msg.msgID == COORD){
+			log_msg("got coord message");
+			if (get_in_port((struct sockaddr *)&sender) > my_clock->nodeId){
+				set_coordinator(&sender);
+			} else{
+				elect_coordinator(sockfd, timeoutValue, 0);
+			}
+		}
+		else if (last_msg.msgID == ELECT){
+			log_msg("got elect msg");
+			send_answer(sockfd, last_msg.electionID, &sender);
+			elect_coordinator(sockfd, timeoutValue, last_msg.electionID);
+		}
+		else if (last_msg.msgID == AYA) {
+			//I must be the coordinator
+			log_msg("received aya message");
+			send_iaa(sockfd, &sender);
+		}
+		else if (last_msg.msgID == IAA) {
+			//The coordinator is alive.
+			//we just go back to sending an AYA
+			log_msg("received IAA");
+		}
+	  }
+	  //after handling the most recent message we should have a coordinator, that is a loop invariant.
+	  //therefore we should send an aya message to the coordinator, unless we are the coordinator
+	  if (!i_am_coordinator()){	
+		//wait some random amount of time and send an AYA
+		int rn;
+		rn = random();
+		int sc = rn % (2*AYATime);
+		sleep(sc);
+		send_aya(sockfd);
+	  }
+	  num_loops++;
   }
-  else{
-	//make sure the message is in the correct endianness
-	net_to_host_msg(&last_msg);
-	if (last_msg.msgID == COORD){
-		printf("got coord message\n");
-		set_coordinator(&sender);
-	}
-	if (last_msg.msgID == ELECT){
-		printf("got elect msg\n");
-		start_election(sockfd, last_msg.electionID);
-	}
-  }
-
+  log_msg("Bully algorithm loop has completed");
+  printf("done\n");
   close(sockfd);
-
-  // If you want to produce a repeatable sequence of "random" numbers
-  // replace the call time() with an integer.
-  int i;
-  for (i = 0; i < 10; i++) {
-    int rn;
-    rn = random(); 
-
-    // scale to number between 0 and the 2*AYA time so that 
-    // the average value for the timeout is AYA time.
-
-    int sc = rn % (2*AYATime);
-    //printf("Random number %d is: %d\n", i, sc);
-  }
-
   return 0;
   
 }
